@@ -8,7 +8,6 @@ const defaultOptions = {
     instagram: true,
     linkedin: true
   },
-  buttonStyle: 'default',
   highlightColor: '#FFEB3B',
   highlightDuration: 2.0
 };
@@ -24,7 +23,6 @@ function saveOptions() {
       instagram: document.getElementById('instagram').checked,
       linkedin: document.getElementById('linkedin').checked
     },
-    buttonStyle: document.getElementById('buttonStyle').value,
     highlightColor: document.getElementById('highlightColor').value,
     highlightDuration: parseFloat(document.getElementById('highlightDuration').value)
   };
@@ -55,7 +53,6 @@ function loadOptions() {
     document.getElementById('linkedin').checked = options.platforms.linkedin;
     
     // Set other options
-    document.getElementById('buttonStyle').value = options.buttonStyle;
     document.getElementById('highlightColor').value = options.highlightColor;
     document.getElementById('highlightDuration').value = options.highlightDuration;
     document.getElementById('durationValue').textContent = options.highlightDuration.toFixed(1);

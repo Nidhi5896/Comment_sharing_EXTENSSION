@@ -54,7 +54,6 @@ const defaultOptions = {
     instagram: true,
     linkedin: true
   },
-  buttonStyle: 'default',
   highlightColor: '#FFEB3B',
   highlightDuration: 2.0
 };
@@ -64,10 +63,16 @@ let userOptions = defaultOptions;
 
 // Load options from storage
 function loadUserOptions(callback) {
-  chrome.storage.sync.get('options', (data) => {
-    userOptions = data.options || defaultOptions;
+  if (typeof chrome !== 'undefined' && chrome.storage) {
+    chrome.storage.sync.get('options', (data) => {
+      userOptions = data.options || defaultOptions;
+      if (callback) callback();
+    });
+  } else {
+    // Fallback for when chrome API is not available (e.g., during testing)
+    console.warn('Chrome storage API not available');
     if (callback) callback();
-  });
+  }
 }
 
 // Detect which platform we're on
@@ -100,25 +105,100 @@ function generateCommentHash(commentText) {
   return Math.abs(hash).toString(16);
 }
 
+// Create a popup with the shareable link
+function createShareLinkPopup(shareableUrl, event) {
+  // Remove any existing popups
+  const existingPopup = document.querySelector('.comment-share-popup');
+  if (existingPopup) {
+    existingPopup.remove();
+  }
+  
+  // Create popup container
+  const popup = document.createElement('div');
+  popup.className = 'comment-share-popup';
+  
+  // Create popup header
+  const header = document.createElement('div');
+  header.className = 'comment-share-popup-header';
+  header.innerHTML = '<span>Share Comment Link</span><button class="comment-share-popup-close">&times;</button>';
+  
+  // Create popup content
+  const content = document.createElement('div');
+  content.className = 'comment-share-popup-content';
+  
+  // Create URL input field
+  const linkInput = document.createElement('input');
+  linkInput.type = 'text';
+  linkInput.className = 'comment-share-popup-link';
+  linkInput.value = shareableUrl;
+  linkInput.readOnly = true;
+  
+  // Create copy button
+  const copyButton = document.createElement('button');
+  copyButton.className = 'comment-share-popup-copy-btn';
+  copyButton.textContent = 'Copy Link';
+  
+  // Add elements to content
+  content.appendChild(linkInput);
+  content.appendChild(copyButton);
+  
+  // Add header and content to popup
+  popup.appendChild(header);
+  popup.appendChild(content);
+  
+  // Position popup relative to the click event
+  const rect = event.target.getBoundingClientRect();
+  popup.style.position = 'fixed';
+  popup.style.left = `${Math.min(rect.left, window.innerWidth - 340)}px`;
+  popup.style.top = `${rect.bottom + 10}px`;
+  
+  // Add popup to the document
+  document.body.appendChild(popup);
+  
+  // Focus and select the link
+  setTimeout(() => {
+    linkInput.focus();
+    linkInput.select();
+  }, 100);
+  
+  // Handle copy button click
+  copyButton.addEventListener('click', () => {
+    linkInput.select();
+    document.execCommand('copy');
+    
+    // Show "Copied!" text temporarily
+    copyButton.textContent = 'Copied!';
+    copyButton.classList.add('copied');
+    setTimeout(() => {
+      copyButton.textContent = 'Copy Link';
+      copyButton.classList.remove('copied');
+    }, 2000);
+  });
+  
+  // Handle close button click
+  const closeButton = header.querySelector('.comment-share-popup-close');
+  closeButton.addEventListener('click', () => {
+    popup.remove();
+  });
+  
+  // Close popup when clicking outside
+  document.addEventListener('click', function closePopup(e) {
+    if (!popup.contains(e.target) && e.target !== event.target && !event.target.contains(e.target)) {
+      popup.remove();
+      document.removeEventListener('click', closePopup);
+    }
+  });
+  
+  return popup;
+}
+
 // Create a share button for a comment
 function createShareButton(commentElement, commentData) {
-  // Create button element based on style preference
-  let shareButton;
-  
-  if (userOptions.buttonStyle === 'icon') {
-    // Icon only button
-    shareButton = document.createElement('button');
-    shareButton.className = 'comment-share-btn comment-share-icon-btn';
-    shareButton.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"></path><polyline points="16 6 12 2 8 6"></polyline><line x1="12" y1="2" x2="12" y2="15"></line></svg>';
-  } else {
-    // Text or default button
-    shareButton = document.createElement('button');
-    shareButton.className = 'comment-share-btn';
-    if (userOptions.buttonStyle === 'text') {
-      shareButton.classList.add('comment-share-text-btn');
-    }
-    shareButton.textContent = 'Share Comment';
-  }
+  // Create icon button
+  const shareButton = document.createElement('button');
+  shareButton.className = 'comment-share-btn comment-share-icon-btn';
+  shareButton.title = 'Share Comment';
+  shareButton.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"></path><polyline points="16 6 12 2 8 6"></polyline><line x1="12" y1="2" x2="12" y2="15"></line></svg>';
   
   // Click handler
   shareButton.addEventListener('click', (event) => {
@@ -127,29 +207,16 @@ function createShareButton(commentElement, commentData) {
     
     // Create the shareable URL
     const url = new URL(window.location.href);
+    // Clear any existing shared_comment parameter
+    url.searchParams.delete('shared_comment');
+    // Add the new parameter
     url.searchParams.set('shared_comment', JSON.stringify(commentData));
     
-    // Copy to clipboard
-    navigator.clipboard.writeText(url.toString())
-      .then(() => {
-        // Show "Copied!" tooltip
-        const tooltip = document.createElement('div');
-        tooltip.className = 'copied-tooltip';
-        tooltip.textContent = 'Link copied!';
-        tooltip.style.left = `${event.clientX}px`;
-        tooltip.style.top = `${event.clientY - 30}px`;
-        document.body.appendChild(tooltip);
-        
-        // Show the tooltip
-        setTimeout(() => tooltip.classList.add('show'), 10);
-        
-        // Remove the tooltip after 2 seconds
-        setTimeout(() => {
-          tooltip.classList.remove('show');
-          setTimeout(() => document.body.removeChild(tooltip), 300);
-        }, 2000);
-      })
-      .catch(err => console.error('Failed to copy: ', err));
+    const shareableUrl = url.toString();
+    console.log('Generated shareable URL:', shareableUrl);
+    
+    // Show popup with the link
+    createShareLinkPopup(shareableUrl, event);
   });
   
   return shareButton;
@@ -293,6 +360,7 @@ function checkForSharedComment() {
   
   if (sharedComment) {
     try {
+      console.log('Found shared comment in URL:', sharedComment);
       const commentData = JSON.parse(sharedComment);
       // Wait for page to fully load before attempting to find the comment
       setTimeout(() => scrollToComment(commentData), 1500);
@@ -303,23 +371,19 @@ function checkForSharedComment() {
 }
 
 // Listen for storage changes to update options in real-time
-chrome.storage.onChanged.addListener((changes, namespace) => {
-  if (namespace === 'sync' && changes.options) {
-    userOptions = changes.options.newValue;
-    
-    // Update buttons on the page if the button style changed
-    if (changes.options.oldValue && 
-        changes.options.oldValue.buttonStyle !== changes.options.newValue.buttonStyle) {
-      // Remove existing buttons
-      document.querySelectorAll('.comment-share-btn').forEach(btn => btn.remove());
-      // Add new buttons with the updated style
-      addShareButtonsToComments();
+if (typeof chrome !== 'undefined' && chrome.storage) {
+  chrome.storage.onChanged.addListener((changes, namespace) => {
+    if (namespace === 'sync' && changes.options) {
+      userOptions = changes.options.newValue;
     }
-  }
-});
+  });
+}
 
 // Initialize on page load
 function initialize() {
+  // Log that the extension is running
+  console.log('Comment Share extension initialized');
+  
   // Load user options first
   loadUserOptions(() => {
     // Initial run after options are loaded
@@ -327,7 +391,7 @@ function initialize() {
     checkForSharedComment();
     
     // Set up a MutationObserver to add share buttons to new comments
-    const observer = new MutationObserver((mutations) => {
+    const observer = new MutationObserver(() => {
       // Wait a bit to let the DOM settle
       setTimeout(addShareButtonsToComments, 500);
     });
@@ -340,12 +404,14 @@ function initialize() {
   });
   
   // Listen for messages from the background script
-  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message.action === 'scrollToComment' && message.commentData) {
-      scrollToComment(message.commentData);
-    }
-    return true;
-  });
+  if (typeof chrome !== 'undefined' && chrome.runtime) {
+    chrome.runtime.onMessage.addListener((message) => {
+      if (message.action === 'scrollToComment' && message.commentData) {
+        scrollToComment(message.commentData);
+      }
+      return true;
+    });
+  }
 }
 
 // Start when DOM is fully loaded
