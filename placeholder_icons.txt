@@ -1,0 +1,23 @@
+ICON CREATION INSTRUCTIONS
+
+You need to create three icon files for the Chrome extension:
+
+1. icon16.png (16x16 pixels)
+2. icon48.png (48x48 pixels)
+3. icon128.png (128x128 pixels)
+
+Place these files in the 'images' directory.
+
+Suggested icon design:
+- A speech bubble or comment icon with a share/link symbol
+- Blue color theme (#1a73e8) matching the share button style
+- Simple, recognizable design that works at small sizes
+
+You can use any image editing software like:
+- Adobe Photoshop
+- GIMP (free)
+- Figma
+- Canva
+- Or use an icon generator service
+
+Once created, place them in the images directory with the exact filenames mentioned above. 
