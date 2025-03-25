@@ -27,6 +27,7 @@ const PLATFORMS = {
     commentUsernameSelector: '#author-text',
     commentTimestampSelector: '.published-time-text',
     actionBarSelector: '#toolbar',
+    commentIdAttribute: 'id', // YouTube comment threads have IDs
   },
   instagram: {
     commentSelector: '._a9zr',
@@ -192,34 +193,71 @@ function createShareLinkPopup(shareableUrl, event) {
   return popup;
 }
 
-// Create a share button for a comment
-function createShareButton(commentElement, commentData) {
-  // Create icon button
-  const shareButton = document.createElement('button');
-  shareButton.className = 'comment-share-btn comment-share-icon-btn';
-  shareButton.title = 'Share Comment';
-  shareButton.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"></path><polyline points="16 6 12 2 8 6"></polyline><line x1="12" y1="2" x2="12" y2="15"></line></svg>';
+// Extract YouTube specific comment ID if available
+function extractYouTubeCommentId(commentElement) {
+  if (!commentElement || !commentElement.id) return null;
+  return commentElement.id;
+}
+
+// Get YouTube player instance
+function getYouTubePlayer() {
+  // Method 1: Try to get player via YouTube's API
+  if (typeof document.getElementById === 'function' && 
+      typeof window.YT !== 'undefined' && 
+      typeof window.YT.get === 'function') {
+    try {
+      const player = window.YT.get('movie_player');
+      if (player) return player;
+    } catch (e) {
+      console.warn('Failed to get player via YT.get()', e);
+    }
+  }
   
-  // Click handler
-  shareButton.addEventListener('click', (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    
-    // Create the shareable URL
-    const url = new URL(window.location.href);
-    // Clear any existing shared_comment parameter
-    url.searchParams.delete('shared_comment');
-    // Add the new parameter
-    url.searchParams.set('shared_comment', JSON.stringify(commentData));
-    
-    const shareableUrl = url.toString();
-    console.log('Generated shareable URL:', shareableUrl);
-    
-    // Show popup with the link
-    createShareLinkPopup(shareableUrl, event);
-  });
+  // Method 2: Try to get video element directly
+  try {
+    const videoElement = document.querySelector('.video-stream');
+    if (videoElement) return videoElement;
+  } catch (e) {
+    console.warn('Failed to get video element', e);
+  }
   
-  return shareButton;
+  // Method 3: Try to get movie_player element
+  try {
+    const moviePlayer = document.getElementById('movie_player');
+    if (moviePlayer) return moviePlayer;
+  } catch (e) {
+    console.warn('Failed to get movie_player element', e);
+  }
+  
+  return null;
+}
+
+// Extract specific information for YouTube comments
+function extractYouTubeInfo() {
+  // Get video ID from URL
+  const url = new URL(window.location.href);
+  const videoId = url.searchParams.get('v');
+  
+  // Get current video timestamp (if available)
+  let timestamp = 0;
+  try {
+    const player = getYouTubePlayer();
+    if (player) {
+      // Try different methods to get current time
+      if (typeof player.getCurrentTime === 'function') {
+        timestamp = Math.floor(player.getCurrentTime());
+      } else if (player.currentTime !== undefined) {
+        timestamp = Math.floor(player.currentTime);
+      }
+    }
+  } catch (e) {
+    console.warn('Could not get video timestamp', e);
+  }
+  
+  return {
+    videoId,
+    timestamp
+  };
 }
 
 // Extract comment data (text, username, timestamp)
@@ -241,12 +279,71 @@ function extractCommentData(commentElement, platform) {
   // Generate a hash from comment text
   const commentHash = generateCommentHash(commentText);
   
+  // Additional platform-specific data
+  let extraData = {};
+  
+  // For YouTube, extract additional info
+  if (platform === 'youtube') {
+    // Get comment ID
+    const commentId = extractYouTubeCommentId(commentElement);
+    if (commentId) {
+      extraData.commentId = commentId;
+    }
+    
+    // Get video info
+    const youtubeInfo = extractYouTubeInfo();
+    if (youtubeInfo.videoId) {
+      extraData.videoId = youtubeInfo.videoId;
+      extraData.videoTimestamp = youtubeInfo.timestamp;
+    }
+  }
+  
   return {
     text: commentText,
     username: username,
     timestamp: timestamp,
-    hash: commentHash
+    hash: commentHash,
+    ...extraData
   };
+}
+
+// Create a share button for a comment
+function createShareButton(commentElement, commentData) {
+  // Create icon button
+  const shareButton = document.createElement('button');
+  shareButton.className = 'comment-share-btn comment-share-icon-btn';
+  shareButton.title = 'Share Comment';
+  shareButton.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"></path><polyline points="16 6 12 2 8 6"></polyline><line x1="12" y1="2" x2="12" y2="15"></line></svg>';
+  
+  // Click handler
+  shareButton.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    
+    // Create the shareable URL
+    const url = new URL(window.location.href);
+    
+    // For YouTube, create a cleaner URL with just the video ID and comment data
+    if (commentData.videoId) {
+      // Use video URL with just the ID
+      url.searchParams.delete('t');
+      url.searchParams.delete('ab_channel');
+      url.searchParams.set('v', commentData.videoId);
+    }
+    
+    // Clear any existing shared_comment parameter
+    url.searchParams.delete('shared_comment');
+    // Add the new parameter
+    url.searchParams.set('shared_comment', JSON.stringify(commentData));
+    
+    const shareableUrl = url.toString();
+    console.log('Generated shareable URL:', shareableUrl);
+    
+    // Show popup with the link
+    createShareLinkPopup(shareableUrl, event);
+  });
+  
+  return shareButton;
 }
 
 // Add share buttons to all comments on the page
@@ -272,13 +369,82 @@ function addShareButtonsToComments() {
   });
 }
 
+// Find YouTube comment by ID or content
+function findYouTubeComment(commentData) {
+  // Method 1: Try to find by comment ID
+  if (commentData.commentId) {
+    const commentById = document.getElementById(commentData.commentId);
+    if (commentById) {
+      console.log('Found comment by ID');
+      return commentById;
+    }
+  }
+  
+  // Method 2: Try to find by text content and author
+  const comments = document.querySelectorAll('ytd-comment-thread-renderer');
+  console.log(`Searching through ${comments.length} YouTube comments`);
+  
+  for (const comment of comments) {
+    // Check text content
+    const textElement = comment.querySelector('#content-text');
+    if (!textElement) continue;
+    
+    const commentText = textElement.textContent.trim();
+    
+    // If text doesn't match, skip
+    if (commentText !== commentData.text) continue;
+    
+    // If we have username, check that too
+    if (commentData.username) {
+      const authorElement = comment.querySelector('#author-text');
+      if (authorElement) {
+        const authorName = authorElement.textContent.trim();
+        if (authorName !== commentData.username) continue;
+      }
+    }
+    
+    // If we got here, we found a match
+    console.log('Found comment by content match');
+    return comment;
+  }
+  
+  // Method 3: Try just by hash
+  for (const comment of comments) {
+    const textElement = comment.querySelector('#content-text');
+    if (!textElement) continue;
+    
+    const commentText = textElement.textContent.trim();
+    const hash = generateCommentHash(commentText);
+    
+    if (hash === commentData.hash) {
+      console.log('Found comment by hash');
+      return comment;
+    }
+  }
+  
+  return null;
+}
+
 // Find a comment based on data from URL
 function findComment(commentData) {
   const platform = detectPlatform();
   if (!platform || !PLATFORMS[platform]) return null;
   
+  // Use platform-specific finders if available
+  if (platform === 'youtube') {
+    return findYouTubeComment(commentData);
+  }
+  
   const config = PLATFORMS[platform];
   const comments = document.querySelectorAll(config.commentSelector);
+  
+  // For YouTube, try to find by commentId first
+  if (platform === 'youtube' && commentData.commentId) {
+    const commentWithId = document.getElementById(commentData.commentId);
+    if (commentWithId) {
+      return commentWithId;
+    }
+  }
   
   // First try to find by text and username
   for (const comment of comments) {
@@ -303,13 +469,87 @@ function findComment(commentData) {
   return null;
 }
 
+// Function to progressively load YouTube comments by scrolling
+function loadYouTubeComments(callback, maxScrolls = 10) {
+  let scrollCount = 0;
+  let previousCommentCount = 0;
+  
+  const checkAndScroll = () => {
+    // Get current comment count
+    const comments = document.querySelectorAll('ytd-comment-thread-renderer');
+    const currentCommentCount = comments.length;
+    
+    console.log(`YouTube comments loaded: ${currentCommentCount}`);
+    
+    // Stop if we've reached max scrolls or comments aren't increasing
+    if (scrollCount >= maxScrolls || 
+        (scrollCount > 2 && currentCommentCount === previousCommentCount)) {
+      console.log('Finished loading YouTube comments');
+      if (callback) callback();
+      return;
+    }
+    
+    // Update previous count
+    previousCommentCount = currentCommentCount;
+    
+    // Scroll to load more comments
+    window.scrollTo({
+      top: document.body.scrollHeight,
+      behavior: 'smooth'
+    });
+    
+    // Increment counter
+    scrollCount++;
+    
+    // Check again after a delay
+    setTimeout(checkAndScroll, 1500);
+  };
+  
+  // Start the process
+  checkAndScroll();
+}
+
 // Scroll to and highlight a comment
-function scrollToComment(commentData) {
+function scrollToComment(commentData, retryCount = 0, maxRetries = 10) {
+  const platform = detectPlatform();
   const comment = findComment(commentData);
+  
   if (!comment) {
-    console.log('Comment not found, will retry in 1 second');
-    // Wait and try again, as comments might still be loading
-    setTimeout(() => scrollToComment(commentData), 1000);
+    if (retryCount >= maxRetries) {
+      console.log('Comment not found after maximum retries');
+      return;
+    }
+    
+    console.log(`Comment not found, will retry in ${Math.min(2 ** retryCount, 5)} seconds (attempt ${retryCount + 1}/${maxRetries})`);
+    
+    // For YouTube, try to load more comments by scrolling
+    if (platform === 'youtube' && retryCount === 0) {
+      // First try, initiate progressive loading of comments
+      console.log('Starting progressive loading of YouTube comments');
+      loadYouTubeComments(() => {
+        // After loading, try to find the comment again
+        const foundComment = findComment(commentData);
+        if (foundComment) {
+          console.log('Comment found after loading more comments');
+          scrollToComment(commentData);
+        } else {
+          console.log('Comment not found after initial loading, will continue retrying');
+          setTimeout(() => {
+            scrollToComment(commentData, retryCount + 1, maxRetries);
+          }, Math.min(2 ** retryCount, 5) * 1000);
+        }
+      });
+      return;
+    } else if (platform === 'youtube') {
+      // On subsequent tries, just scroll a bit more
+      window.scrollBy(0, 500);
+    }
+    
+    // Wait with exponential backoff and retry
+    setTimeout(() => {
+      scrollToComment(commentData, retryCount + 1, maxRetries);
+    }, Math.min(2 ** retryCount, 5) * 1000);
+    
     return;
   }
   
@@ -362,8 +602,60 @@ function checkForSharedComment() {
     try {
       console.log('Found shared comment in URL:', sharedComment);
       const commentData = JSON.parse(sharedComment);
-      // Wait for page to fully load before attempting to find the comment
-      setTimeout(() => scrollToComment(commentData), 1500);
+      
+      // For YouTube, we need to ensure comments are loaded
+      const platform = detectPlatform();
+      
+      if (platform === 'youtube') {
+        // For YouTube, wait for video player to be ready
+        const initialWait = 3000;
+        
+        setTimeout(() => {
+          // If there's a video timestamp, seek to it first
+          if (commentData.videoId && commentData.videoTimestamp && commentData.videoTimestamp > 0) {
+            try {
+              const player = getYouTubePlayer();
+              if (player) {
+                // Try different methods to seek
+                if (typeof player.seekTo === 'function') {
+                  player.seekTo(commentData.videoTimestamp);
+                } else if (player.currentTime !== undefined) {
+                  player.currentTime = commentData.videoTimestamp;
+                }
+                console.log(`Seeking to timestamp: ${commentData.videoTimestamp}`);
+              }
+            } catch (e) {
+              console.warn('Could not seek to timestamp', e);
+            }
+          }
+          
+          // First ensure comments section is visible
+          const commentsSection = document.querySelector('ytd-comments');
+          if (commentsSection) {
+            console.log('Scrolling to comments section');
+            commentsSection.scrollIntoView({ behavior: 'smooth' });
+            
+            // Expand comments if they're collapsed
+            const expandButton = document.querySelector('#comments-button');
+            if (expandButton) {
+              expandButton.click();
+              console.log('Clicked to expand comments');
+            }
+            
+            // Give time for the initial comments to load
+            setTimeout(() => {
+              // Then attempt to find our specific comment
+              scrollToComment(commentData);
+            }, 2000);
+          } else {
+            console.log('Comments section not found, will retry');
+            setTimeout(() => checkForSharedComment(), 2000);
+          }
+        }, initialWait);
+      } else {
+        // For other platforms, use the standard approach
+        setTimeout(() => scrollToComment(commentData), 1500);
+      }
     } catch (error) {
       console.error('Failed to parse shared comment data', error);
     }
