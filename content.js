@@ -369,56 +369,161 @@ function addShareButtonsToComments() {
   });
 }
 
-// Find YouTube comment by ID or content
+// Add a comment cache for fast retrieval
+const commentCache = {
+  byId: new Map(),
+  byText: new Map(),
+  byHash: new Map(),
+  lastSearched: null,
+  
+  // Store a comment with multiple keys for fast lookup
+  store(commentData, commentElement) {
+    if (commentData.commentId) {
+      this.byId.set(commentData.commentId, commentElement);
+    }
+    
+    if (commentData.text) {
+      const textKey = commentData.username 
+        ? `${commentData.text}::${commentData.username}` 
+        : commentData.text;
+      this.byText.set(textKey, commentElement);
+    }
+    
+    if (commentData.hash) {
+      this.byHash.set(commentData.hash, commentElement);
+    }
+    
+    this.lastSearched = commentData;
+  },
+  
+  // Find a comment in cache
+  find(commentData) {
+    // Try to find by ID (fastest)
+    if (commentData.commentId && this.byId.has(commentData.commentId)) {
+      return this.byId.get(commentData.commentId);
+    }
+    
+    // Try to find by text+username
+    if (commentData.text && commentData.username) {
+      const textKey = `${commentData.text}::${commentData.username}`;
+      if (this.byText.has(textKey)) {
+        return this.byText.get(textKey);
+      }
+    }
+    
+    // Try to find just by text
+    if (commentData.text && this.byText.has(commentData.text)) {
+      return this.byText.get(commentData.text);
+    }
+    
+    // Try to find by hash
+    if (commentData.hash && this.byHash.has(commentData.hash)) {
+      return this.byHash.get(commentData.hash);
+    }
+    
+    return null;
+  }
+};
+
+// Find YouTube comment by ID or content with ultra-fast algorithm
 function findYouTubeComment(commentData) {
-  // Method 1: Try to find by comment ID
+  // Try cache first for instant retrieval
+  const cachedComment = commentCache.find(commentData);
+  if (cachedComment) {
+    console.log('Found comment in cache');
+    return cachedComment;
+  }
+  
+  // Method 1: Try to find by comment ID (fastest method)
   if (commentData.commentId) {
     const commentById = document.getElementById(commentData.commentId);
     if (commentById) {
       console.log('Found comment by ID');
+      // Store in cache for future lookups
+      commentCache.store(commentData, commentById);
       return commentById;
     }
   }
   
-  // Method 2: Try to find by text content and author
-  const comments = document.querySelectorAll('ytd-comment-thread-renderer');
-  console.log(`Searching through ${comments.length} YouTube comments`);
+  // Method 2: Ultra-fast direct selector approach
+  // For text + username combo, build a targeted selector
+  if (commentData.text && commentData.username) {
+    try {
+      // Use a single query to find matching comments
+      const comments = document.querySelectorAll('ytd-comment-thread-renderer');
+      
+      // Parallel array filtering approach for faster processing
+      const matchingComment = Array.from(comments).find(comment => {
+        const textElement = comment.querySelector('#content-text');
+        const authorElement = comment.querySelector('#author-text');
+        
+        if (!textElement || !authorElement) return false;
+        
+        const text = textElement.textContent.trim();
+        const author = authorElement.textContent.trim();
+        
+        return text === commentData.text && author === commentData.username;
+      });
+      
+      if (matchingComment) {
+        console.log('Found comment by direct selector');
+        commentCache.store(commentData, matchingComment);
+        return matchingComment;
+      }
+    } catch (e) {
+      console.warn('Error in fast selector search:', e);
+    }
+  }
   
-  for (const comment of comments) {
-    // Check text content
-    const textElement = comment.querySelector('#content-text');
-    if (!textElement) continue;
+  // Hash-based direct lookup
+  if (commentData.hash) {
+    const comments = document.querySelectorAll('ytd-comment-thread-renderer');
     
-    const commentText = textElement.textContent.trim();
+    // Process in chunks for better responsiveness
+    const CHUNK_SIZE = 50;
+    let result = null;
     
-    // If text doesn't match, skip
-    if (commentText !== commentData.text) continue;
-    
-    // If we have username, check that too
-    if (commentData.username) {
-      const authorElement = comment.querySelector('#author-text');
-      if (authorElement) {
-        const authorName = authorElement.textContent.trim();
-        if (authorName !== commentData.username) continue;
+    for (let i = 0; i < comments.length; i += CHUNK_SIZE) {
+      const chunk = Array.from(comments).slice(i, i + CHUNK_SIZE);
+      
+      const matchingComment = chunk.find(comment => {
+        const textElement = comment.querySelector('#content-text');
+        if (!textElement) return false;
+        
+        const commentText = textElement.textContent.trim();
+        const hash = generateCommentHash(commentText);
+        
+        return hash === commentData.hash;
+      });
+      
+      if (matchingComment) {
+        result = matchingComment;
+        break;
       }
     }
     
-    // If we got here, we found a match
-    console.log('Found comment by content match');
-    return comment;
+    if (result) {
+      console.log('Found comment by hash');
+      commentCache.store(commentData, result);
+      return result;
+    }
   }
   
-  // Method 3: Try just by hash
-  for (const comment of comments) {
-    const textElement = comment.querySelector('#content-text');
-    if (!textElement) continue;
+  // If we just have text, try a text-only match
+  if (commentData.text) {
+    // Direct content match
+    const selector = `ytd-comment-thread-renderer #content-text`;
+    const allTextElements = document.querySelectorAll(selector);
     
-    const commentText = textElement.textContent.trim();
-    const hash = generateCommentHash(commentText);
-    
-    if (hash === commentData.hash) {
-      console.log('Found comment by hash');
-      return comment;
+    for (const textElement of allTextElements) {
+      if (textElement.textContent.trim() === commentData.text) {
+        const comment = textElement.closest('ytd-comment-thread-renderer');
+        if (comment) {
+          console.log('Found comment by text match');
+          commentCache.store(commentData, comment);
+          return comment;
+        }
+      }
     }
   }
   
@@ -469,48 +574,63 @@ function findComment(commentData) {
   return null;
 }
 
-// Function to progressively load YouTube comments by scrolling
-function loadYouTubeComments(callback, maxScrolls = 10) {
-  let scrollCount = 0;
+// Function to load all YouTube comments with smooth scrolling
+function loadYouTubeComments(callback, maxJumps = 3) {
+  let jumpCount = 0;
   let previousCommentCount = 0;
+  let noChangeCount = 0;
   
-  const checkAndScroll = () => {
+  const checkAndJump = () => {
     // Get current comment count
     const comments = document.querySelectorAll('ytd-comment-thread-renderer');
     const currentCommentCount = comments.length;
     
     console.log(`YouTube comments loaded: ${currentCommentCount}`);
     
-    // Stop if we've reached max scrolls or comments aren't increasing
-    if (scrollCount >= maxScrolls || 
-        (scrollCount > 2 && currentCommentCount === previousCommentCount)) {
+    // Stop if we've reached max jumps or comments aren't increasing
+    if (jumpCount >= maxJumps || noChangeCount >= 2) {
       console.log('Finished loading YouTube comments');
       if (callback) callback();
       return;
     }
     
+    // Track if comments are still loading
+    if (currentCommentCount === previousCommentCount) {
+      noChangeCount++;
+    } else {
+      noChangeCount = 0;
+    }
+    
     // Update previous count
     previousCommentCount = currentCommentCount;
     
-    // Scroll to load more comments
+    // Jump to end of page to force-load all comments
     window.scrollTo({
-      top: document.body.scrollHeight,
-      behavior: 'smooth'
+      top: document.body.scrollHeight * 3, // Overscroll to force loading
+      behavior: 'smooth' // Restored smooth scrolling
     });
     
-    // Increment counter
-    scrollCount++;
+    // Jump back to the comments section after a moment
+    setTimeout(() => {
+      const commentsSection = document.querySelector('ytd-comments');
+      if (commentsSection) {
+        commentsSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    }, 500); // Increased to allow smooth scrolling to complete
     
-    // Check again after a delay
-    setTimeout(checkAndScroll, 1500);
+    // Increment counter
+    jumpCount++;
+    
+    // Check again after a delay - increased to allow smooth scrolling
+    setTimeout(checkAndJump, 1000);
   };
   
   // Start the process
-  checkAndScroll();
+  checkAndJump();
 }
 
-// Scroll to and highlight a comment
-function scrollToComment(commentData, retryCount = 0, maxRetries = 10) {
+// Scroll to and highlight a comment with smooth approach
+function scrollToComment(commentData, retryCount = 0, maxRetries = 3) {
   const platform = detectPlatform();
   const comment = findComment(commentData);
   
@@ -520,42 +640,205 @@ function scrollToComment(commentData, retryCount = 0, maxRetries = 10) {
       return;
     }
     
-    console.log(`Comment not found, will retry in ${Math.min(2 ** retryCount, 5)} seconds (attempt ${retryCount + 1}/${maxRetries})`);
+    // Fast but not instant backoff
+    const backoffTime = 500 + (retryCount * 300); // Adjusted for better user experience
+    console.log(`Comment not found, will retry in ${backoffTime/1000} seconds (attempt ${retryCount + 1}/${maxRetries})`);
     
     // For YouTube, try to load more comments by scrolling
     if (platform === 'youtube' && retryCount === 0) {
-      // First try, initiate progressive loading of comments
-      console.log('Starting progressive loading of YouTube comments');
+      // First try, initiate loading of comments with smooth scrolling
+      console.log('Starting loading of YouTube comments');
       loadYouTubeComments(() => {
         // After loading, try to find the comment again
         const foundComment = findComment(commentData);
         if (foundComment) {
           console.log('Comment found after loading more comments');
-          scrollToComment(commentData);
+          // Smooth scroll to the comment
+          foundComment.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          highlightComment(foundComment);
         } else {
           console.log('Comment not found after initial loading, will continue retrying');
           setTimeout(() => {
             scrollToComment(commentData, retryCount + 1, maxRetries);
-          }, Math.min(2 ** retryCount, 5) * 1000);
+          }, backoffTime);
         }
-      });
+      }, 2);
       return;
     } else if (platform === 'youtube') {
-      // On subsequent tries, just scroll a bit more
-      window.scrollBy(0, 500);
+      // Jump to different sections to trigger more comment loading
+      const sections = [0.3, 0.6, 0.9];
+      const section = sections[retryCount % sections.length];
+      
+      window.scrollTo({
+        top: document.body.scrollHeight * section,
+        behavior: 'smooth' // Restored smooth scrolling
+      });
+      
+      // Also try forcing comments into view
+      const commentsSection = document.querySelector('ytd-comments');
+      if (commentsSection) {
+        setTimeout(() => {
+          commentsSection.scrollIntoView({ behavior: 'smooth' });
+        }, 300); // Increased to allow smooth scrolling 
+      }
     }
     
-    // Wait with exponential backoff and retry
+    // Wait and retry
     setTimeout(() => {
       scrollToComment(commentData, retryCount + 1, maxRetries);
-    }, Math.min(2 ** retryCount, 5) * 1000);
+    }, backoffTime);
     
     return;
   }
   
-  // Scroll to the comment
+  // Smooth scroll to the comment
   comment.scrollIntoView({ behavior: 'smooth', block: 'center' });
   
+  // Highlight the comment
+  highlightComment(comment);
+}
+
+// Check if we have a shared comment in the URL - with smooth scrolling
+function checkForSharedComment() {
+  // Early startup for YouTube to begin loading comments
+  const preloadYouTubeComments = () => {
+    const commentsSection = document.querySelector('ytd-comments');
+    if (commentsSection) {
+      // Force comments section into view with smooth scrolling
+      commentsSection.scrollIntoView({ behavior: 'smooth' });
+      
+      // Click to expand comments if they're collapsed
+      const expandButton = document.querySelector('#comments-button');
+      if (expandButton) expandButton.click();
+      
+      // Start preloading comments after a short delay
+      setTimeout(() => {
+        // Quick jump to force loading, but with smooth behavior
+        window.scrollTo({
+          top: document.body.scrollHeight,
+          behavior: 'smooth'
+        });
+        
+        // Jump back to comments after a moment
+        setTimeout(() => {
+          commentsSection.scrollIntoView({ behavior: 'smooth' });
+        }, 400); // Increased to allow smooth scrolling
+      }, 300); // Increased to allow smooth scrolling
+    }
+  };
+
+  const urlParams = new URLSearchParams(window.location.search);
+  const sharedComment = urlParams.get('shared_comment');
+  
+  if (!sharedComment) return;
+  
+  try {
+    console.log('Found shared comment in URL:', sharedComment);
+    const commentData = JSON.parse(sharedComment);
+    
+    const platform = detectPlatform();
+    
+    if (platform === 'youtube') {
+      // Approach for YouTube with smooth scrolling
+      const initialWait = 1000; // Slightly increased for smooth experience
+      
+      // Start some operations immediately
+      if (commentData.videoId && commentData.videoTimestamp && commentData.videoTimestamp > 0) {
+        // Try to get player immediately
+        requestAnimationFrame(() => {
+          try {
+            const player = getYouTubePlayer();
+            if (player) {
+              if (typeof player.seekTo === 'function') {
+                player.seekTo(commentData.videoTimestamp);
+              } else if (player.currentTime !== undefined) {
+                player.currentTime = commentData.videoTimestamp;
+              }
+            }
+          } catch (e) {
+            console.warn('Initial seek attempt failed, will retry:', e);
+          }
+        });
+      }
+      
+      // Start a timer for the main navigation sequence
+      setTimeout(() => {
+        // If there's a video timestamp, seek to it first (second attempt)
+        if (commentData.videoId && commentData.videoTimestamp && commentData.videoTimestamp > 0) {
+          try {
+            const player = getYouTubePlayer();
+            if (player) {
+              if (typeof player.seekTo === 'function') {
+                player.seekTo(commentData.videoTimestamp);
+              } else if (player.currentTime !== undefined) {
+                player.currentTime = commentData.videoTimestamp;
+              }
+              console.log(`Seeking to timestamp: ${commentData.videoTimestamp}`);
+            }
+          } catch (e) {
+            console.warn('Could not seek to timestamp', e);
+          }
+        }
+        
+        // Scroll to comments section
+        const commentsSection = document.querySelector('ytd-comments');
+        if (commentsSection) {
+          console.log('Scrolling to comments section');
+          commentsSection.scrollIntoView({ behavior: 'smooth' });
+          
+          // Expand comments if they're collapsed
+          const expandButton = document.querySelector('#comments-button');
+          if (expandButton) {
+            expandButton.click();
+            console.log('Clicked to expand comments');
+          }
+          
+          // First try to find the comment immediately
+          setTimeout(() => {
+            const immediateFind = findComment(commentData);
+            if (immediateFind) {
+              console.log('Comment found immediately without loading');
+              // Smooth scroll to the comment
+              immediateFind.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              
+              // Highlight found comment
+              highlightComment(immediateFind);
+            } else {
+              // Start comment loading with smooth scrolling
+              loadYouTubeComments(() => {
+                // After loading attempt to navigate
+                const foundComment = findComment(commentData);
+                if (foundComment) {
+                  console.log('Comment found after loading');
+                  foundComment.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                  highlightComment(foundComment);
+                } else {
+                  // Last resort - regular retry approach
+                  console.log('Comment not found after initial loading, will retry');
+                  scrollToComment(commentData);
+                }
+              }, 2);
+            }
+          }, 400); // Small delay to allow comments section to come into view
+        } else {
+          console.log('Comments section not found, will retry');
+          setTimeout(() => checkForSharedComment(), 1000);
+        }
+      }, initialWait);
+      
+      // Start preloading comments immediately
+      preloadYouTubeComments();
+    } else {
+      // For other platforms, use smooth scrolling
+      setTimeout(() => scrollToComment(commentData), 500);
+    }
+  } catch (error) {
+    console.error('Failed to parse shared comment data', error);
+  }
+}
+
+// Extract highlight logic to separate function for reuse
+function highlightComment(comment) {
   // Create a dynamic style for the highlight animation based on user options
   const styleId = 'comment-share-highlight-style';
   let styleEl = document.getElementById(styleId);
@@ -593,75 +876,6 @@ function scrollToComment(commentData, retryCount = 0, maxRetries = 10) {
   }, userOptions.highlightDuration * 1000);
 }
 
-// Check if we have a shared comment in the URL
-function checkForSharedComment() {
-  const urlParams = new URLSearchParams(window.location.search);
-  const sharedComment = urlParams.get('shared_comment');
-  
-  if (sharedComment) {
-    try {
-      console.log('Found shared comment in URL:', sharedComment);
-      const commentData = JSON.parse(sharedComment);
-      
-      // For YouTube, we need to ensure comments are loaded
-      const platform = detectPlatform();
-      
-      if (platform === 'youtube') {
-        // For YouTube, wait for video player to be ready
-        const initialWait = 3000;
-        
-        setTimeout(() => {
-          // If there's a video timestamp, seek to it first
-          if (commentData.videoId && commentData.videoTimestamp && commentData.videoTimestamp > 0) {
-            try {
-              const player = getYouTubePlayer();
-              if (player) {
-                // Try different methods to seek
-                if (typeof player.seekTo === 'function') {
-                  player.seekTo(commentData.videoTimestamp);
-                } else if (player.currentTime !== undefined) {
-                  player.currentTime = commentData.videoTimestamp;
-                }
-                console.log(`Seeking to timestamp: ${commentData.videoTimestamp}`);
-              }
-            } catch (e) {
-              console.warn('Could not seek to timestamp', e);
-            }
-          }
-          
-          // First ensure comments section is visible
-          const commentsSection = document.querySelector('ytd-comments');
-          if (commentsSection) {
-            console.log('Scrolling to comments section');
-            commentsSection.scrollIntoView({ behavior: 'smooth' });
-            
-            // Expand comments if they're collapsed
-            const expandButton = document.querySelector('#comments-button');
-            if (expandButton) {
-              expandButton.click();
-              console.log('Clicked to expand comments');
-            }
-            
-            // Give time for the initial comments to load
-            setTimeout(() => {
-              // Then attempt to find our specific comment
-              scrollToComment(commentData);
-            }, 2000);
-          } else {
-            console.log('Comments section not found, will retry');
-            setTimeout(() => checkForSharedComment(), 2000);
-          }
-        }, initialWait);
-      } else {
-        // For other platforms, use the standard approach
-        setTimeout(() => scrollToComment(commentData), 1500);
-      }
-    } catch (error) {
-      console.error('Failed to parse shared comment data', error);
-    }
-  }
-}
-
 // Listen for storage changes to update options in real-time
 if (typeof chrome !== 'undefined' && chrome.storage) {
   chrome.storage.onChanged.addListener((changes, namespace) => {
@@ -671,21 +885,47 @@ if (typeof chrome !== 'undefined' && chrome.storage) {
   });
 }
 
-// Initialize on page load
+// Initialize on page load with fast startup
 function initialize() {
   // Log that the extension is running
   console.log('Comment Share extension initialized');
   
-  // Load user options first
+  // Check for shared comment immediately, don't wait for options
+  const urlParams = new URLSearchParams(window.location.search);
+  const hasSharedComment = urlParams.has('shared_comment');
+  
+  // If we have a shared comment, start looking immediately
+  if (hasSharedComment) {
+    // For YouTube, preload comments as early as possible
+    if (detectPlatform() === 'youtube') {
+      // Try to preload comments right away
+      requestAnimationFrame(() => {
+        const commentsSection = document.querySelector('ytd-comments');
+        if (commentsSection) {
+          console.log('Early comment section detection, starting preload');
+          commentsSection.scrollIntoView({ behavior: 'auto' });
+        }
+      });
+    }
+    
+    // Start shared comment processing ASAP
+    checkForSharedComment();
+  }
+  
+  // Load user options in parallel
   loadUserOptions(() => {
     // Initial run after options are loaded
     addShareButtonsToComments();
-    checkForSharedComment();
+    
+    // If we haven't already checked, check for shared comment
+    if (!hasSharedComment) {
+      checkForSharedComment();
+    }
     
     // Set up a MutationObserver to add share buttons to new comments
     const observer = new MutationObserver(() => {
-      // Wait a bit to let the DOM settle
-      setTimeout(addShareButtonsToComments, 500);
+      // Wait a bit to let the DOM settle, but not too long
+      setTimeout(addShareButtonsToComments, 300); // Reduced from 500ms
     });
     
     // Start observing the document body for changes
